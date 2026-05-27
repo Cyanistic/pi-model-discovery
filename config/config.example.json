@@ -1,0 +1,69 @@
+{
+  "debug": false,
+  "$comment": "Security: http:// baseUrl values are accepted only for localhost/127.x/::1 development endpoints; use https:// for remote providers. autoImport can use built-in read-only profiles for supported auth-only credentials (NVIDIA, Cloudflare, Cerebras, Qwen, Xiaomi, Cline, Kilo).",
+  "cacheTTL": 7200000,
+  "registration": {
+    "importMode": "replace"
+  },
+  "registrationOwnership": {
+    "onConflict": "merge"
+  },
+  "autoImport": {
+    "enabled": true,
+    "includeProviders": [],
+    "excludeProviders": [],
+    "discovery": {
+      "enabled": true,
+      "headers": {},
+      "timeoutMs": 10000,
+      "includeDetails": false,
+      "typeByProvider": {},
+      "endpointPathByProvider": {}
+    }
+  },
+  "providers": [
+    {
+      "id": "myproxy-discovery",
+      "baseUrl": "http://127.0.0.1:8000/v1",
+      "apiKey": "${MYPROXY_API_KEY}",
+      "api": "openai-completions",
+      "authHeader": true,
+      "discovery": {
+        "type": "openai-compat",
+        "enabled": true,
+        "headers": {},
+        "timeoutMs": 10000,
+        "ttlMs": 7200000,
+        "allowModels": [],
+        "blockModels": [],
+        "pagination": {
+          "enabled": false,
+          "cursorParam": "after",
+          "nextCursorField": "next_page",
+          "hasMoreField": "has_more",
+          "maxPages": 100
+        }
+      },
+      "modelDefaults": {},
+      "fallbackModelIds": [],
+      "defaults": {
+        "contextWindow": 1048576,
+        "maxTokens": 65536,
+        "cost": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0
+        },
+        "input": [
+          "text",
+          "image"
+        ],
+        "reasoning": true,
+        "compat": {
+          "supportsDeveloperRole": false
+        }
+      }
+    }
+  ]
+}

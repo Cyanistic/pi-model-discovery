@@ -1,0 +1,16 @@
+node_modules
+dist
+coverage
+cache.json
+config.json
+debug
+.git
+.gitignore
+.npmignore
+tsconfig.json
+package-lock.json
+test
+tests
+*.log
+*.tmp
+.DS_Store

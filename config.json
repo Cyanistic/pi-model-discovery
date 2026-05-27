@@ -1,0 +1,9 @@
+{
+  "debug": false,
+  "cacheTTL": 7200000,
+  "autoImport": {
+    "enabled": true,
+    "allowUnauthenticated": true
+  },
+  "providers": []
+}

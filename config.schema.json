@@ -1,0 +1,246 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "debug": { "type": "boolean", "default": false },
+    "$comment": {
+      "type": "string",
+      "description": "Optional human-readable note. Example configs use this to document that http:// baseUrl values are accepted only for localhost/127.x/::1 development endpoints."
+    },
+    "cacheTTL": { "type": "integer", "minimum": 60000, "default": 7200000 },
+    "cacheFile": { "type": "string" },
+    "maxModels": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Optional global cap on discovered models per provider. Omit to register every discovered model."
+    },
+    "modelsDev": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "url": {
+          "type": "string",
+          "default": "https://models.dev/api.json",
+          "description": "Absolute http(s) URL for the models.dev-compatible catalog. The loader applies the same URL safety checks as provider baseUrl."
+        },
+        "timeoutMs": { "type": "integer", "minimum": 1000, "default": 30000 }
+      }
+    },
+    "openRouter": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "url": {
+          "type": "string",
+          "default": "https://openrouter.ai/api/v1/models",
+          "description": "Absolute http(s) URL for the OpenRouter models API. The extension requests output_modalities=all at fetch time."
+        },
+        "timeoutMs": { "type": "integer", "minimum": 1000, "default": 30000 }
+      }
+    },
+    "autoImport": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {
+        "enabled": true
+      },
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "When true, import eligible provider definitions from agent/models.json plus active agent/auth.json credentials; supported auth-only providers may use built-in read-only model-list profiles for NVIDIA, Cloudflare, Cerebras, Qwen, Xiaomi, Cline, and Kilo."
+        },
+        "allowUnauthenticated": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true, providers without API-key credentials are still imported for unauthenticated model discovery."
+        },
+        "modelsJsonPath": {
+          "type": "string",
+          "description": "Optional path to the provider metadata registry. Relative paths resolve from this config file."
+        },
+        "authJsonPath": {
+          "type": "string",
+          "description": "Optional path to the credential registry. Relative paths resolve from this config file."
+        },
+        "multiAuthJsonPath": {
+          "type": "string",
+          "description": "Optional path to pi-multi-auth state. Hidden providers in ui.hiddenProviders are skipped before model discovery. Relative paths resolve from this config file."
+        },
+        "includeProviders": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "excludeProviders": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "discovery": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "headers": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "default": {}
+            },
+            "timeoutMs": {
+              "type": "integer",
+              "minimum": 1000,
+              "default": 10000
+            },
+            "ttlMs": {
+              "type": "integer",
+              "minimum": 60000,
+              "default": 7200000
+            },
+            "includeDetails": {
+              "type": "boolean",
+              "default": false
+            },
+            "typeByProvider": {
+              "type": "object",
+              "additionalProperties": {
+                "enum": [
+                  "openai-compat",
+                  "ollama",
+                  "anthropic-compatible",
+                  "openai-responses",
+                  "lm-studio",
+                  "llama-cpp",
+                  "static"
+                ]
+              },
+              "default": {}
+            },
+            "endpointPathByProvider": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "default": {},
+              "description": "Optional relative endpoint paths or absolute http(s) endpoint URLs by provider. Absolute URLs are validated with the same safety checks as baseUrl."
+            }
+          }
+        }
+      }
+    },
+    "registration": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional registration UX settings. The default replace mode preserves historical pi-model-discovery behavior for non-managed providers.",
+      "properties": {
+        "importMode": {
+          "enum": ["replace", "merge", "sync"],
+          "default": "replace",
+          "description": "replace registers only freshly discovered models; merge preserves existing manual and prior pi-model-discovery entries; sync removes stale pi-model-discovery entries while preserving manual entries. Providers managed by pi-multi-auth default to merge during ownership conflicts."
+        }
+      }
+    },
+    "registrationOwnership": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Conflict behavior for provider IDs owned by pi-multi-auth credentials/settings.",
+      "properties": {
+        "onConflict": {
+          "enum": ["merge", "skip"],
+          "default": "merge",
+          "description": "merge registers discovered models for the managed provider without changing ownership; skip is a legacy opt-in that suppresses pi-model-discovery registration."
+        }
+      }
+    },
+    "providers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "baseUrl", "api", "discovery"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" },
+          "baseUrl": {
+            "type": "string",
+            "description": "Absolute http(s) URL. HTTPS is required except localhost/127.x local-development endpoints; credentials, query strings, fragments, and metadata-service hosts are rejected."
+          },
+          "apiKey": { "type": "string" },
+          "api": { "type": "string" },
+          "authHeader": { "type": "boolean", "default": true },
+          "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+          "maxModels": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Optional provider-specific cap. Omit to inherit the optional global cap, or to remain uncapped when no global cap is configured."
+          },
+          "discovery": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type"],
+            "properties": {
+              "type": { "enum": ["openai-compat", "ollama", "anthropic-compatible", "openai-responses", "lm-studio", "llama-cpp", "static"] },
+              "enabled": { "type": "boolean", "default": true },
+              "endpointPath": {
+                "type": "string",
+                "description": "Optional relative endpoint path or absolute http(s) endpoint URL. Absolute URLs are validated with the same safety checks as baseUrl."
+              },
+              "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+              "timeoutMs": { "type": "integer", "minimum": 1000 },
+              "ttlMs": { "type": "integer", "minimum": 60000 },
+              "includeDetails": { "type": "boolean" },
+              "allowModels": {
+                "type": "array",
+                "items": { "type": "string" },
+                "default": [],
+                "description": "Optional substring allow-list applied to discovered model IDs before registration. Empty means allow all."
+              },
+              "blockModels": {
+                "type": "array",
+                "items": { "type": "string" },
+                "default": [],
+                "description": "Optional substring block-list applied after allowModels. Matching model IDs are excluded."
+              },
+              "pagination": {
+                "type": "object",
+                "additionalProperties": false,
+                "description": "Cursor pagination settings for providers whose models endpoint returns multiple pages.",
+                "properties": {
+                  "enabled": { "type": "boolean", "default": true },
+                  "cursorParam": { "type": "string", "default": "after" },
+                  "nextCursorField": { "type": "string", "default": "next_page" },
+                  "hasMoreField": { "type": "string", "default": "has_more" },
+                  "maxPages": { "type": "integer", "minimum": 1, "maximum": 100, "default": 100 }
+                }
+              }
+            }
+          },
+          "defaults": { "type": "object" },
+          "modelDefaults": {
+            "type": "object",
+            "additionalProperties": { "type": "object" },
+            "default": {},
+            "description": "Optional per-model defaults keyed by discovered model ID, applied after endpoint and catalog metadata."
+          },
+          "fallbackModelIds": {
+            "type": "array",
+            "items": { "type": "string" },
+            "default": [],
+            "description": "Optional fallback model IDs registered from config/models.json defaults when live discovery and cache are unavailable."
+          }
+        }
+      }
+    }
+  }
+}
