@@ -137,6 +137,68 @@ test("provider cache freshness rejects legacy BlazeAPI Claude Anthropic endpoint
   assert.equal(isProviderCacheEntryFresh("blazeapi", cleanEntry, now), true);
 });
 
+test("provider cache freshness rejects legacy OpenAI-compatible reasoning metadata gaps", () => {
+  const now = new Date("2026-05-01T00:10:00.000Z");
+  const staleReasoningEntry: CacheEntry = {
+    fetchedAt: "2026-05-01T00:09:00.000Z",
+    ttlMs: 60 * 60 * 1000,
+    authoritative: true,
+    models: [
+      {
+        ...model,
+        id: "gpt-5.5-openai-compact",
+        reasoning: true,
+        compat: {},
+        sources: { dynamic: true, modelsDev: true },
+        capabilityProvenance: { id: "dynamic", reasoning: "modelsDev" },
+      },
+    ],
+  };
+  const freshReasoningEntry: CacheEntry = {
+    ...staleReasoningEntry,
+    models: [
+      {
+        ...staleReasoningEntry.models[0]!,
+        compat: { supportsReasoningEffort: true },
+        thinkingLevelMap: { off: "none", minimal: null, xhigh: "xhigh" },
+      },
+    ],
+  };
+
+  assert.equal(isProviderCacheEntryFresh("qianxiang", staleReasoningEntry, now), false);
+  assert.equal(isProviderCacheEntryFresh("qianxiang", freshReasoningEntry, now), true);
+});
+
+test("provider cache freshness rejects legacy Claude Opus entries without xhigh metadata", () => {
+  const now = new Date("2026-05-01T00:10:00.000Z");
+  const staleOpusEntry: CacheEntry = {
+    fetchedAt: "2026-05-01T00:09:00.000Z",
+    ttlMs: 60 * 60 * 1000,
+    authoritative: true,
+    models: [
+      {
+        ...model,
+        id: "claude-opus-4-8",
+        reasoning: true,
+        sources: { dynamic: true, modelsDev: true },
+        capabilityProvenance: { id: "dynamic", reasoning: "modelsDev" },
+      },
+    ],
+  };
+  const freshOpusEntry: CacheEntry = {
+    ...staleOpusEntry,
+    models: [
+      {
+        ...staleOpusEntry.models[0]!,
+        thinkingLevelMap: { xhigh: "xhigh" },
+      },
+    ],
+  };
+
+  assert.equal(isProviderCacheEntryFresh("qianxiang", staleOpusEntry, now), false);
+  assert.equal(isProviderCacheEntryFresh("qianxiang", freshOpusEntry, now), true);
+});
+
 test("cache provider batch writes read and write the cache once", async () => {
   const dir = mkdtempSync(join(tmpdir(), "pi-model-discovery-cache-batch-"));
   const cachePath = join(dir, "cache.json");

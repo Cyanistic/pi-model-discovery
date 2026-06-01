@@ -21,10 +21,32 @@ function hasLegacyBlazeApiClaudeAnthropicOverrides(providerId: string | undefine
   });
 }
 
+function compatSupportsReasoningEffort(compat: DiscoveredModel["compat"] | undefined): boolean {
+  return (compat as { supportsReasoningEffort?: unknown } | undefined)?.supportsReasoningEffort === true;
+}
+
+function hasLegacyOpenAIReasoningCompatGaps(providerId: string | undefined, entry: CacheEntry): boolean {
+  if (providerId === undefined) return false;
+  return entry.models.some((model) => {
+    if (!/(^|\/)gpt-[5-9](?:[.\-]\d+)?(?:[.\-][\w.-]+)?(?:$|[:/])/i.test(model.id)) return false;
+    return model.reasoning !== true || !compatSupportsReasoningEffort(model.compat) || model.thinkingLevelMap?.minimal !== null || model.thinkingLevelMap?.xhigh !== "xhigh";
+  });
+}
+
+function hasLegacyClaudeOpusThinkingLevelGaps(providerId: string | undefined, entry: CacheEntry): boolean {
+  if (providerId === undefined) return false;
+  return entry.models.some((model) => {
+    if (!/(^|\/)claude-opus-4-[678](?:$|[-:/])/i.test(model.id)) return false;
+    return model.reasoning !== true || model.thinkingLevelMap?.xhigh === undefined;
+  });
+}
+
 export function isCacheEntryFresh(entry: CacheEntry, now = new Date(), providerId?: string): boolean {
   if (!entry.authoritative && entry.models.length === 0) return false;
   if (hasLegacyGlobalDefaultOnlyMetadata(entry)) return false;
   if (hasLegacyBlazeApiClaudeAnthropicOverrides(providerId, entry)) return false;
+  if (hasLegacyOpenAIReasoningCompatGaps(providerId, entry)) return false;
+  if (hasLegacyClaudeOpusThinkingLevelGaps(providerId, entry)) return false;
   const fetchedAtMs = Date.parse(entry.fetchedAt);
   if (!Number.isFinite(fetchedAtMs)) return false;
   const maxAge = entry.authoritative ? entry.ttlMs : NON_AUTHORITATIVE_RETRY_MS;
