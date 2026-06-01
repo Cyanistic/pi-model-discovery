@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -25,6 +26,17 @@ interface ResourcesDiscoverEvent {
 }
 
 type ResourcesDiscoverHandler = (event: ResourcesDiscoverEvent, ctx: ExtensionContext) => void;
+
+interface BootstrapRequest {
+  trigger: string;
+  forceRegistration?: boolean;
+}
+
+interface BootstrapRuntimeState {
+  bootstrap?: Promise<void>;
+  discovery?: Promise<void>;
+  pending?: BootstrapRequest;
+}
 
 const EXTENSION_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const PI_MULTI_AUTH_PROVIDERS_REGISTERED_EVENT = "pi-multi-auth:providers-registered";
@@ -55,6 +67,32 @@ export function resolveModelDiscoveryStartupPolicy(
   }
 
   return { networkRefreshDisabled: false, registerStaleCache: false };
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "unknown error";
+}
+
+function readDebugEnabled(extensionRoot: string): boolean {
+  try {
+    const parsed = JSON.parse(readFileSync(join(extensionRoot, "config.json"), "utf-8")) as unknown;
+    return Boolean(
+      parsed &&
+        typeof parsed === "object" &&
+        (parsed as { debug?: unknown }).debug === true,
+    );
+  } catch {
+    return false;
+  }
+}
+
+function logBootstrapFailure(trigger: string, error: unknown): void {
+  const logger = new DebugLogger({
+    extensionRoot: EXTENSION_ROOT,
+    debug: readDebugEnabled(EXTENSION_ROOT),
+  });
+  logger.error("bootstrap_failed", { trigger, message: getErrorMessage(error) });
+  void logger.flush();
 }
 
 function onResourcesDiscover(pi: ExtensionAPI, handler: ResourcesDiscoverHandler): void {
@@ -211,7 +249,7 @@ async function registerCachedModels(
   cacheManager: CacheManager,
   registrar: ModelRegistrar,
   logger: DebugLogger,
-  options: { force?: boolean; allowStale?: boolean } = {},
+  options: { force?: boolean; allowStale?: boolean; readOnlyCache?: boolean } = {},
 ): Promise<void> {
   const cache = cacheManager.read();
   for (const provider of config.providers) {
@@ -231,13 +269,27 @@ async function registerCachedModels(
     if (!models || models.length === 0) continue;
     const mergedModels = mergeWithStaticModels(provider, models);
     if (entry && entryFresh && modelsChanged(entry.models, mergedModels)) {
-      logger.debug("static_fallback_cache_rewritten", {
-        providerId: provider.id,
-        authoritative: entry.authoritative,
-        previousModelCount: entry.models.length,
-        nextModelCount: mergedModels.length,
-      });
-      await cacheManager.writeProviderEntry(provider.id, { ...entry, models: mergedModels });
+      if (options.readOnlyCache) {
+        logger.debug("static_fallback_cache_rewrite_skipped", {
+          providerId: provider.id,
+          reason: MODEL_DISCOVERY_CACHE_ONLY_ENV,
+          authoritative: entry.authoritative,
+          previousModelCount: entry.models.length,
+          nextModelCount: mergedModels.length,
+        });
+      } else {
+        try {
+          await cacheManager.writeProviderEntry(provider.id, { ...entry, models: mergedModels });
+          logger.debug("static_fallback_cache_rewritten", {
+            providerId: provider.id,
+            authoritative: entry.authoritative,
+            previousModelCount: entry.models.length,
+            nextModelCount: mergedModels.length,
+          });
+        } catch (error) {
+          logger.warn("static_fallback_cache_rewrite_failed", { providerId: provider.id, message: getErrorMessage(error) });
+        }
+      }
     }
     try {
       const outcome = registrar.register({ provider, models: mergedModels }, registrationOptions(config, options));
@@ -296,18 +348,31 @@ async function refreshFromDiscovery(config: ExtensionConfig, cacheManager: Cache
     registrations.push({ provider, models, context: "registered_from_discovery" });
   }
 
-  await cacheManager.writeProviders(cacheUpdates);
+  try {
+    await cacheManager.writeProviders(cacheUpdates);
+  } catch (error) {
+    logger.warn("discovery_cache_write_failed", { message: getErrorMessage(error), providerCount: cacheUpdates.length });
+  }
   for (const registration of registrations) {
     const outcome = registrar.register({ provider: registration.provider, models: registration.models }, registrationOptions(config));
     logRegistrationOutcome(logger, registration.provider.id, outcome, registration.context, registration.models.length);
   }
 }
 
+function deferBackgroundRefresh(refresh: () => Promise<void>): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      void refresh().then(resolve, reject);
+    }, 0);
+    timeout.unref?.();
+  });
+}
+
 async function bootstrap(
   pi: ExtensionAPI,
   registrar: ModelRegistrar,
   trigger: string,
-  background: { current?: Promise<void> },
+  runtime: BootstrapRuntimeState,
   options: { forceRegistration?: boolean } = {},
 ): Promise<void> {
   const { config, warnings } = await loadConfigAsync({ extensionRoot: EXTENSION_ROOT });
@@ -325,9 +390,17 @@ async function bootstrap(
     ...config.autoImport.externalStaticProviderIds,
     ...config.providers.filter((provider) => !provider.discovery.enabled).map((provider) => provider.id),
   ]);
-  const prunedProviderIds = await cacheManager.pruneProviderIds(explicitlyPrunedProviderIds);
-  if (prunedProviderIds.length > 0) {
-    logger.debug("pruned_explicitly_removed_provider_cache", { providerIds: prunedProviderIds });
+  if (startupPolicy.networkRefreshDisabled) {
+    logger.debug("cache_prune_skipped", { trigger, reason: startupPolicy.reason });
+  } else {
+    try {
+      const prunedProviderIds = await cacheManager.pruneProviderIds(explicitlyPrunedProviderIds);
+      if (prunedProviderIds.length > 0) {
+        logger.debug("pruned_explicitly_removed_provider_cache", { providerIds: prunedProviderIds });
+      }
+    } catch (error) {
+      logger.warn("cache_prune_failed", { trigger, message: getErrorMessage(error) });
+    }
   }
 
   const removedProviderIds = registrar.unregisterMissing(activeProviderIds);
@@ -338,6 +411,7 @@ async function bootstrap(
   await registerCachedModels(config, cacheManager, registrar, logger, {
     force: options.forceRegistration,
     allowStale: startupPolicy.registerStaleCache,
+    readOnlyCache: startupPolicy.networkRefreshDisabled,
   });
   emitModelDiscoveryReady(pi, {
     trigger,
@@ -354,12 +428,12 @@ async function bootstrap(
     return;
   }
 
-  if (background.current) {
+  if (runtime.discovery) {
     logger.debug("background_refresh_already_running", { trigger });
     return;
   }
 
-  background.current = refreshFromDiscovery(config, cacheManager, registrar, logger)
+  runtime.discovery = deferBackgroundRefresh(() => refreshFromDiscovery(config, cacheManager, registrar, logger))
     .then(() => {
       emitModelDiscoveryReady(pi, {
         trigger,
@@ -371,25 +445,62 @@ async function bootstrap(
       logger.error("background_refresh_failed", { trigger, message: error instanceof Error ? error.message : "unknown error" });
     })
     .finally(() => {
-      background.current = undefined;
+      runtime.discovery = undefined;
+    });
+}
+
+function shouldQueueBootstrap(trigger: string, options: { forceRegistration?: boolean }): boolean {
+  return options.forceRegistration === true || trigger === "resources_discover:reload";
+}
+
+function scheduleBootstrap(
+  pi: ExtensionAPI,
+  registrar: ModelRegistrar,
+  runtime: BootstrapRuntimeState,
+  trigger: string,
+  options: { forceRegistration?: boolean } = {},
+): void {
+  if (runtime.bootstrap) {
+    if (shouldQueueBootstrap(trigger, options)) {
+      runtime.pending = {
+        trigger,
+        forceRegistration: runtime.pending?.forceRegistration === true || options.forceRegistration === true,
+      };
+    }
+    return;
+  }
+
+  runtime.bootstrap = bootstrap(pi, registrar, trigger, runtime, options)
+    .catch((error: unknown) => {
+      logBootstrapFailure(trigger, error);
+    })
+    .finally(() => {
+      runtime.bootstrap = undefined;
+      const pending = runtime.pending;
+      runtime.pending = undefined;
+      if (pending) {
+        scheduleBootstrap(pi, registrar, runtime, pending.trigger, {
+          forceRegistration: pending.forceRegistration,
+        });
+      }
     });
 }
 
 export default function modelDiscoveryExtension(pi: ExtensionAPI): void {
   const registrar = new ModelRegistrar(pi);
-  const background: { current?: Promise<void> } = {};
+  const runtime: BootstrapRuntimeState = {};
 
   registerModelCatalogCommand(pi, EXTENSION_ROOT);
-  void bootstrap(pi, registrar, "extension_load", background);
+  scheduleBootstrap(pi, registrar, runtime, "extension_load");
   pi.events?.on(PI_MULTI_AUTH_PROVIDERS_REGISTERED_EVENT, () => {
-    void bootstrap(pi, registrar, PI_MULTI_AUTH_PROVIDERS_REGISTERED_EVENT, background, { forceRegistration: true });
+    scheduleBootstrap(pi, registrar, runtime, PI_MULTI_AUTH_PROVIDERS_REGISTERED_EVENT, { forceRegistration: true });
   });
 
   pi.on("session_start", (_event, _ctx) => {
-    void bootstrap(pi, registrar, "session_start", background);
+    scheduleBootstrap(pi, registrar, runtime, "session_start");
   });
 
   onResourcesDiscover(pi, (event) => {
-    void bootstrap(pi, registrar, `resources_discover:${event.reason}`, background);
+    scheduleBootstrap(pi, registrar, runtime, `resources_discover:${event.reason}`);
   });
 }

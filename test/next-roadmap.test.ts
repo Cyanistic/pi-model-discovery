@@ -233,9 +233,15 @@ test("enrichment records per-capability provenance for dynamic, catalog, cache, 
   );
 });
 
-test("models.dev metadata maps Claude Opus 4.6/4.7 xhigh to the documented effort tier", () => {
+test("models.dev metadata maps Claude Opus 4.6/4.7/4.8 xhigh to the documented effort tier", () => {
   const lookup = buildModelsDevLookup({
     models: [
+      {
+        id: "anthropic/claude-opus-4.8",
+        name: "Claude Opus 4.8",
+        reasoning: true,
+        limit: { context: 1_000_000, output: 128_000 },
+      },
       {
         id: "anthropic/claude-opus-4.7",
         name: "Claude Opus 4.7",
@@ -251,8 +257,10 @@ test("models.dev metadata maps Claude Opus 4.6/4.7 xhigh to the documented effor
     ],
   });
 
+  const opus48Metadata = lookup.get("anthropic/claude-opus-4.8") as unknown as NextCatalogMetadata | undefined;
   const opus47Metadata = lookup.get("anthropic/claude-opus-4.7") as unknown as NextCatalogMetadata | undefined;
   const opus46Metadata = lookup.get("anthropic/claude-opus-4.6") as unknown as NextCatalogMetadata | undefined;
+  assert.deepEqual(opus48Metadata?.thinkingLevelMap, { xhigh: "xhigh" });
   assert.deepEqual(opus47Metadata?.thinkingLevelMap, { xhigh: "xhigh" });
   assert.deepEqual(opus46Metadata?.thinkingLevelMap, { xhigh: "max" });
 });
