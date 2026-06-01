@@ -1,6 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, parse, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 
 import { getBuiltInProviderProfile, builtInProfileAllowsCredential, listBuiltInProviderProfileIds, type BuiltInCredentialKind, type BuiltInProviderProfile } from "../discovery/builtin-profiles.js";
 import { inferCloudflareModelsEndpoint, inferXiaomiModelsEndpoint } from "../discovery/provider-quirks.js";
@@ -264,49 +263,25 @@ function loadHiddenProvidersFromMultiAuth(path: string, warnings: string[]): str
   }
 }
 
-interface MultiAuthHiddenProvidersApi {
-  readMultiAuthHiddenProviders?: (options: { storagePath: string }) => Promise<unknown> | unknown;
-}
-
 interface HiddenProviderResolution {
   providers?: string[];
   warnings: string[];
 }
 
-async function importMultiAuthHiddenProvidersApi(extensionRoot: string): Promise<MultiAuthHiddenProvidersApi | undefined> {
-  const multiAuthRoot = join(resolveAgentDir(extensionRoot), "extensions", "pi-multi-auth");
-  const candidateModulePaths = [join(multiAuthRoot, "index.js"), join(multiAuthRoot, "index.ts")];
-  for (const modulePath of candidateModulePaths) {
-    if (!existsSync(modulePath)) continue;
-    return import(pathToFileURL(modulePath).href) as Promise<MultiAuthHiddenProvidersApi>;
-  }
-  return undefined;
-}
-
-async function loadHiddenProvidersFromMultiAuthApi(extensionRoot: string, storagePath: string): Promise<HiddenProviderResolution> {
+function loadHiddenProvidersFromMultiAuthConfig(extensionRoot: string): HiddenProviderResolution {
   const warnings: string[] = [];
-  let api: MultiAuthHiddenProvidersApi | undefined;
-  try {
-    api = await importMultiAuthHiddenProvidersApi(extensionRoot);
-  } catch (error) {
-    warnings.push(`Unable to load pi-multi-auth hidden provider API: ${error instanceof Error ? error.message : "unknown error"}. Falling back to legacy hidden-provider JSON import.`);
-    return { warnings };
-  }
-
-  if (!api) return { warnings };
-  if (typeof api.readMultiAuthHiddenProviders !== "function") {
-    warnings.push("pi-multi-auth hidden provider API is unavailable. Falling back to legacy hidden-provider JSON import.");
-    return { warnings };
-  }
+  const configPath = join(resolveAgentDir(extensionRoot), "extensions", "pi-multi-auth", "config.json");
+  if (!existsSync(configPath)) return { warnings };
 
   try {
-    const rawHiddenProviders = await api.readMultiAuthHiddenProviders({ storagePath });
     return {
-      providers: normalizeHiddenProviderIds(rawHiddenProviders, warnings, "pi-multi-auth hidden providers"),
+      providers: readHiddenProvidersFromMultiAuthRoot(readJsonFileWithTransientRetry(configPath), warnings),
       warnings,
     };
   } catch (error) {
-    warnings.push(`Unable to read hidden providers from pi-multi-auth API: ${error instanceof Error ? error.message : "unknown error"}. Falling back to legacy hidden-provider JSON import.`);
+    if (!isTransientJsonReadError(error)) {
+      warnings.push(`Unable to read hidden providers from pi-multi-auth config.json: ${error instanceof Error ? error.message : "unknown error"}. Falling back to legacy hidden-provider JSON import.`);
+    }
     return { warnings };
   }
 }
@@ -1237,29 +1212,12 @@ function normalizeRegistrationOwnershipConflictMode(value: unknown, warnings: st
   return "merge";
 }
 
-function resolveMultiAuthJsonPathForApi(paths: LoaderPaths): string {
-  const configPath = paths.configPath ?? join(paths.extensionRoot, "config.json");
-  const configDir = dirname(configPath);
-  const defaultMultiAuthJsonPath = paths.multiAuthJsonPath ?? resolveAgentJsonPath(paths.extensionRoot, "multi-auth.json");
-  if (!existsSync(configPath)) return defaultMultiAuthJsonPath;
-  try {
-    const rawConfig = readJsonFile(configPath);
-    const raw = isRecord(rawConfig) ? rawConfig : {};
-    const rawAutoImport = isRecord(raw.autoImport) ? raw.autoImport : {};
-    return resolveConfigPath(rawAutoImport.multiAuthJsonPath, configDir, defaultMultiAuthJsonPath);
-  } catch {
-    return defaultMultiAuthJsonPath;
-  }
-}
-
 export async function loadConfigAsync(paths: LoaderPaths): Promise<ConfigLoadResult> {
-  const multiAuthJsonPath = resolveMultiAuthJsonPathForApi(paths);
-  const hiddenProviderResolution = await loadHiddenProvidersFromMultiAuthApi(paths.extensionRoot, multiAuthJsonPath);
-  return loadConfigInternal(paths, hiddenProviderResolution);
+  return loadConfigInternal(paths, loadHiddenProvidersFromMultiAuthConfig(paths.extensionRoot));
 }
 
 export function loadConfig(paths: LoaderPaths): ConfigLoadResult {
-  return loadConfigInternal(paths);
+  return loadConfigInternal(paths, loadHiddenProvidersFromMultiAuthConfig(paths.extensionRoot));
 }
 
 function loadConfigInternal(paths: LoaderPaths, hiddenProviderResolution?: HiddenProviderResolution): ConfigLoadResult {

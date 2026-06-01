@@ -260,8 +260,8 @@ test("auto-import skips providers hidden by multi-auth UI state", () => {
   assert.equal(result.warnings.some((warning) => /factoryai|vivgrid|dappit|manual-hidden/.test(warning)), false);
 });
 
-test("auto-import reads hidden providers from pi-multi-auth API instead of stale legacy JSON", async () => {
-  const agentDir = mkdtempSync(join(tmpdir(), "pi-model-discovery-hidden-api-agent-"));
+test("auto-import reads hidden providers from pi-multi-auth config instead of stale legacy JSON", async () => {
+  const agentDir = mkdtempSync(join(tmpdir(), "pi-model-discovery-hidden-config-agent-"));
   const extensionRoot = join(agentDir, "extensions", "pi-model-discovery");
   const multiAuthRoot = join(agentDir, "extensions", "pi-multi-auth");
   mkdirSync(extensionRoot, { recursive: true });
@@ -275,18 +275,9 @@ test("auto-import reads hidden providers from pi-multi-auth API instead of stale
       hiddenProviders: ["legacy-hidden"],
     },
   });
-  writeJson(join(multiAuthRoot, "package.json"), { type: "module" });
-  writeFileSync(
-    join(multiAuthRoot, "index.js"),
-    [
-      "export async function readMultiAuthHiddenProviders(options) {",
-      "  globalThis.__modelDiscoveryMultiAuthApiCalls = [ ...(globalThis.__modelDiscoveryMultiAuthApiCalls || []), options ];",
-      "  return ['api-hidden'];",
-      "}",
-      "",
-    ].join("\n"),
-    "utf-8",
-  );
+  writeJson(join(multiAuthRoot, "config.json"), {
+    hiddenProviders: ["config-hidden"],
+  });
   writeJson(modelsJsonPath, {
     providers: {
       "legacy-hidden": {
@@ -294,37 +285,24 @@ test("auto-import reads hidden providers from pi-multi-auth API instead of stale
         api: "openai-completions",
         models: [],
       },
-      "api-hidden": {
-        baseUrl: "https://api-hidden.example.invalid/v1",
+      "config-hidden": {
+        baseUrl: "https://config-hidden.example.invalid/v1",
         api: "openai-completions",
         models: [],
       },
     },
   });
-  const legacyHiddenApiKey = createTestApiKey("legacy-hidden-api");
+  const legacyHiddenApiKey = createTestApiKey("legacy-hidden-config");
   writeJson(authJsonPath, {
     "legacy-hidden": { type: "api_key", key: legacyHiddenApiKey },
-    "api-hidden": { type: "api_key", key: createTestApiKey("api-hidden-api") },
+    "config-hidden": { type: "api_key", key: createTestApiKey("config-hidden") },
   });
 
-  const previousCalls = (globalThis as { __modelDiscoveryMultiAuthApiCalls?: unknown[] }).__modelDiscoveryMultiAuthApiCalls;
-  (globalThis as { __modelDiscoveryMultiAuthApiCalls?: unknown[] }).__modelDiscoveryMultiAuthApiCalls = [];
-  try {
-    const result = await loadConfigAsync({ extensionRoot, configPath });
+  const result = await loadConfigAsync({ extensionRoot, configPath });
 
-    assert.deepEqual(result.config.autoImport.hiddenProviders, ["api-hidden"]);
-    assert.deepEqual(result.config.providers.map((provider) => provider.id), ["legacy-hidden"]);
-    assert.equal(result.config.providers[0]?.apiKey, legacyHiddenApiKey);
-    assert.deepEqual((globalThis as { __modelDiscoveryMultiAuthApiCalls?: unknown[] }).__modelDiscoveryMultiAuthApiCalls, [
-      { storagePath: join(agentDir, "multi-auth.json") },
-    ]);
-  } finally {
-    if (previousCalls === undefined) {
-      delete (globalThis as { __modelDiscoveryMultiAuthApiCalls?: unknown[] }).__modelDiscoveryMultiAuthApiCalls;
-    } else {
-      (globalThis as { __modelDiscoveryMultiAuthApiCalls?: unknown[] }).__modelDiscoveryMultiAuthApiCalls = previousCalls;
-    }
-  }
+  assert.deepEqual(result.config.autoImport.hiddenProviders, ["config-hidden"]);
+  assert.deepEqual(result.config.providers.map((provider) => provider.id), ["legacy-hidden"]);
+  assert.equal(result.config.providers[0]?.apiKey, legacyHiddenApiKey);
 });
 
 test("auto-import skips provider IDs owned by sibling static provider extensions", () => {
