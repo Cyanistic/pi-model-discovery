@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-01
+
+### Added
+- Added cache replacement retries for transient file access failures.
+- Added cache-only startup support, scheduled bootstrap/deferred background refresh behavior, and stale-cache handling for reasoning metadata gaps.
+- Added enrichment metadata for OpenAI reasoning compatibility and Huashang free model coverage.
+
+### Changed
+- Read hidden-provider configuration directly from static config instead of dynamically importing multi-auth.
+- Widened Pi peer dependency compatibility to include Pi 0.77.x and 0.78.x.
+
 ## [0.1.0] - 2026-05-27
 
 ### Added
