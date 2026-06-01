@@ -107,6 +107,12 @@ const BLAZEAPI_PROVIDER_ID = "blazeapi";
 const OLLAMA_PROVIDER_ID = "ollama";
 const PROVIDER_QUIRK_SOURCE = "providerQuirk";
 const OLLAMA_CLOUD_FREE_SOURCE = "ollamaCloudHardcoded";
+const REASONING_COMPAT_SOURCE = "reasoningCompatDefaults";
+const OPENAI_REASONING_MODEL_PATTERN = /(^|\/)gpt-[5-9](?:[.\-]\d+)?(?:[.\-][\w.-]+)?(?:$|[:/])/i;
+const OPENAI_REASONING_EFFORT_MODEL_PATTERN = /(^|\/)(?:gpt-[5-9]|o[1-9]|codex)(?:[.\-]\d+)?(?:[.\-][\w.-]+)?(?:$|[:/])/i;
+const OPENAI_REASONING_DISABLED_EFFORT = "none";
+const OPENAI_REASONING_UNSUPPORTED_MINIMAL = null;
+const OPENAI_REASONING_XHIGH_EFFORT = "xhigh";
 
 /**
  * Hard-coded free/premium classification for Ollama Cloud models based on
@@ -158,8 +164,62 @@ const OLLAMA_CLOUD_PREMIUM_MODELS = new Set([
   "deepseek-v4-pro",
 ]);
 
+/**
+ * Hard-coded truly-free models from huashang.dpdns.org (model_price=0 AND model_ratio=0).
+ * Source: HAR archive 2026-05-30 pricing API.
+ * These models have zero token cost and zero per-request cost.
+ */
+const HUASHANG_FREE_MODELS = new Set([
+  // Meta
+  "meta-llama/llama-3.2-3b-instruct:free",
+  "meta-llama/llama-3.3-70b-instruct:free",
+  "nousresearch/hermes-3-llama-3.1-405b:free",
+  // MiniMax
+  "minimax/minimax-m2.5:free",
+  "minimaxai/minimax-m2.7",
+  // Mistral
+  "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
+  // Moonshot
+  "kimi-k2.6",
+  "kimi-k2.6-agent",
+  "kimi-k2.6-agent-swarm",
+  "kimi-k2.6-search",
+  "kimi-k2.6-thinking",
+  "kimi-k2.6-thinking-search",
+  "moonshotai/kimi-k2.6",
+  // OpenAI
+  "openai/gpt-oss-120b:free",
+  "openai/gpt-oss-20b:free",
+  // Unknown/Other
+  "aisingapore/sea-lion-7b-instruct",
+  "google/gemma-4-26b-a4b-it:free",
+  "google/gemma-4-31b-it:free",
+  "liquid/lfm-2.5-1.2b-instruct:free",
+  "liquid/lfm-2.5-1.2b-thinking:free",
+  "nvidia/nemotron-3-nano-30b-a3b:free",
+  "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+  "nvidia/nemotron-3-super-120b-a12b:free",
+  "nvidia/nemotron-nano-12b-v2-vl:free",
+  "nvidia/nemotron-nano-9b-v2:free",
+  "openrouter/free",
+  "poolside/laguna-m.1:free",
+  "poolside/laguna-xs.2:free",
+  // 智谱
+  "z-ai/glm-4.5-air:free",
+  // 阿里巴巴
+  "qwen/qwen3-coder:free",
+  "qwen/qwen3-next-80b-a3b-instruct:free",
+  "qwen3.7-max",
+]);
+
+const HUASHANG_FREE_SOURCE = "huashangHardcoded";
+
 function isOllamaCloudProvider(provider: ProviderConfigEntry): boolean {
   return provider.id === OLLAMA_PROVIDER_ID;
+}
+
+function isHuashangProvider(provider: ProviderConfigEntry): boolean {
+  return provider.id.startsWith("huashang");
 }
 
 export function applyOllamaCloudFreePremium(model: DiscoveredModel): DiscoveredModel {
@@ -169,6 +229,12 @@ export function applyOllamaCloudFreePremium(model: DiscoveredModel): DiscoveredM
   const isFree = OLLAMA_CLOUD_FREE_MODELS.has(model.id);
   const next = withProvenance(model, "isFree", isFree, OLLAMA_CLOUD_FREE_SOURCE, model.isFree);
   return { ...next, isFree, sources: { ...next.sources, [OLLAMA_CLOUD_FREE_SOURCE]: true } };
+}
+
+export function applyHuashangFreeModels(model: DiscoveredModel): DiscoveredModel {
+  if (!HUASHANG_FREE_MODELS.has(model.id)) return model;
+  const next = withProvenance(model, "isFree", true, HUASHANG_FREE_SOURCE, model.isFree);
+  return { ...next, isFree: true, sources: { ...next.sources, [HUASHANG_FREE_SOURCE]: true } };
 }
 
 
@@ -185,14 +251,60 @@ function isBlazeApiClaudeRoute(provider: ProviderConfigEntry, model: DiscoveredM
   ].some(isBlazeApiClaudeRouteIdentifier);
 }
 
+function isOpenAICompatibleReasoningModel(provider: ProviderConfigEntry, model: DiscoveredModel): boolean {
+  if (provider.api !== "openai-completions") return false;
+  if (model.reasoning !== true) return false;
+  const identities = [model.id, model.name, model.endpointMetadata?.providerId, model.endpointMetadata?.routingGroup].filter(
+    (value): value is string => typeof value === "string" && value.length > 0,
+  );
+  return identities.some((identity) => OPENAI_REASONING_MODEL_PATTERN.test(identity));
+}
+
+function supportsOpenAIReasoningEffort(model: DiscoveredModel): boolean {
+  const identities = [model.id, model.name, model.endpointMetadata?.providerId, model.endpointMetadata?.routingGroup].filter(
+    (value): value is string => typeof value === "string" && value.length > 0,
+  );
+  return identities.some((identity) => OPENAI_REASONING_EFFORT_MODEL_PATTERN.test(identity));
+}
+
+function applyOpenAIReasoningCompatDefaults(model: DiscoveredModel): DiscoveredModel {
+  const nextCompat = supportsOpenAIReasoningEffort(model)
+    ? {
+        ...model.compat,
+        supportsReasoningEffort: true,
+      }
+    : model.compat;
+  const nextThinkingLevelMap = {
+    ...model.thinkingLevelMap,
+    off: model.thinkingLevelMap?.off ?? OPENAI_REASONING_DISABLED_EFFORT,
+    minimal: model.thinkingLevelMap?.minimal ?? OPENAI_REASONING_UNSUPPORTED_MINIMAL,
+    xhigh: model.thinkingLevelMap?.xhigh ?? OPENAI_REASONING_XHIGH_EFFORT,
+  };
+
+  let next = model;
+  next = withProvenance(next, "compat", nextCompat, REASONING_COMPAT_SOURCE, next.compat);
+  next = withProvenance(next, "thinkingLevelMap", nextThinkingLevelMap, REASONING_COMPAT_SOURCE, next.thinkingLevelMap);
+  return {
+    ...next,
+    compat: nextCompat,
+    thinkingLevelMap: nextThinkingLevelMap,
+    sources: { ...next.sources, [REASONING_COMPAT_SOURCE]: true },
+  };
+}
+
 export function applyProviderModelQuirks(provider: ProviderConfigEntry, model: DiscoveredModel): DiscoveredModel {
-  if (!isBlazeApiClaudeRoute(provider, model)) return model;
+  let nextModel = model;
+  if (isOpenAICompatibleReasoningModel(provider, nextModel)) {
+    nextModel = applyOpenAIReasoningCompatDefaults(nextModel);
+  }
+
+  if (!isBlazeApiClaudeRoute(provider, nextModel)) return nextModel;
 
   const nextCompat = {
-    ...model.compat,
+    ...nextModel.compat,
     supportsReasoningEffort: false,
   };
-  const next = withProvenance(model, "compat", nextCompat, PROVIDER_QUIRK_SOURCE, model.compat);
+  const next = withProvenance(nextModel, "compat", nextCompat, PROVIDER_QUIRK_SOURCE, nextModel.compat);
   return {
     ...next,
     compat: nextCompat,
@@ -356,6 +468,9 @@ export function enrichProviderModels(
     model = applyProviderModelQuirks(provider, model);
     if (isOllamaCloudProvider(provider)) {
       model = applyOllamaCloudFreePremium(model);
+    }
+    if (isHuashangProvider(provider)) {
+      model = applyHuashangFreeModels(model);
     }
     model = { ...model, id: rawModel.id, sources: { ...model.sources, dynamic: true } };
     return model;

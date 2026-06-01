@@ -251,6 +251,73 @@ test("enrichment keeps exact model IDs ahead of non-origin variant aliases", () 
   );
 });
 
+test("enrichment strips gateway variants before catalog lookup and enables OpenAI-compatible reasoning controls", () => {
+  const lookup: ModelsDevLookup = new Map([
+    [
+      "gpt-5.5",
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        reasoning: true,
+        input: ["text", "image"],
+        output: ["text"],
+        capabilities: { toolCalling: true, structuredOutputs: true, temperature: false },
+        contextWindow: 1_050_000,
+        maxTokens: 128_000,
+        cost: { input: 5, output: 30, cacheRead: 0.5 },
+      },
+    ],
+  ]);
+
+  const [enriched] = enrichProviderModels(
+    { ...provider, id: "qianxiang", source: "auto-import", defaults: {}, modelDefaults: {} },
+    [{ id: "gpt-5.5-openai-compact" }],
+    lookup,
+    [
+      {
+        ...model("gpt-5.5-openai-compact", "Cached Compact", 0, 0),
+        sources: { dynamic: true, globalDefaults: true },
+        capabilityProvenance: { id: "dynamic" },
+      },
+    ],
+  );
+
+  assert.deepEqual(
+    {
+      name: enriched?.name,
+      reasoning: enriched?.reasoning,
+      input: enriched?.input,
+      contextWindow: enriched?.contextWindow,
+      maxTokens: enriched?.maxTokens,
+      compat: enriched?.compat,
+      thinkingLevelMap: enriched?.thinkingLevelMap,
+      provenance: enriched?.capabilityProvenance,
+    },
+    {
+      name: "GPT-5.5",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+      compat: { supportsReasoningEffort: true },
+      thinkingLevelMap: { off: "none", minimal: null, xhigh: "xhigh" },
+      provenance: {
+        id: "dynamic",
+        name: "modelsDev",
+        reasoning: "modelsDev",
+        input: "modelsDev",
+        output: "modelsDev",
+        capabilities: "modelsDev",
+        cost: "modelsDev",
+        contextWindow: "modelsDev",
+        maxTokens: "modelsDev",
+        compat: "reasoningCompatDefaults",
+        thinkingLevelMap: "reasoningCompatDefaults",
+      },
+    },
+  );
+});
+
 test("auto-import enrichment lets models.json defaults override catalog metadata", () => {
   const lookup: ModelsDevLookup = new Map([
     [

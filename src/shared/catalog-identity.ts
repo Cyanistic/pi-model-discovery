@@ -1,5 +1,5 @@
 export const CATALOG_LOOKUP_PREFIX_PATTERN = /^(route:|scanner\/)/i;
-export const CATALOG_VARIANT_SUFFIX_SEGMENTS = new Set(["fast", "highspeed", "image", "search", "test", "thinking", "video"]);
+export const CATALOG_VARIANT_SUFFIX_SEGMENTS = new Set(["compact", "fast", "highspeed", "image", "openai", "search", "test", "thinking", "video"]);
 
 export function stripCatalogLookupPrefix(value: string): string {
   return value.trim().replace(CATALOG_LOOKUP_PREFIX_PATTERN, "");

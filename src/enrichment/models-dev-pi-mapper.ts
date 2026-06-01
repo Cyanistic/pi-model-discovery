@@ -82,6 +82,7 @@ function normalizedModelIdentity(candidate: Record<string, unknown>, id: string)
 
 function claudeOpusXhighEffort(candidate: Record<string, unknown>, id: string): "xhigh" | "max" | undefined {
   const identity = normalizedModelIdentity(candidate, id);
+  if (identity.includes("claude-opus-4-8")) return "xhigh";
   if (identity.includes("claude-opus-4-7")) return "xhigh";
   if (identity.includes("claude-opus-4-6")) return "max";
   return undefined;
