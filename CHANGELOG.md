@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-06-16
+
+### Changed
+- Improved model catalog command display with richer metadata columns and aligned model registration output.
+- Enhanced enrichment merger to handle additional model metadata fields and fallback defaults.
+
 ## [0.2.0] - 2026-06-01
 
 ### Added
