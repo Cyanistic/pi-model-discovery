@@ -50,13 +50,13 @@ function model(id: string, name: string, inputCost: number, outputCost: number):
   };
 }
 
-test("enrichment applies defaults, models.dev metadata, cache overlay, and reasoning on every model", () => {
+test("enrichment applies cache before models.dev so catalog metadata replaces stale cached values", () => {
   const lookup: ModelsDevLookup = new Map([
     ["raw-model", { id: "raw-model", name: "Raw Model", reasoning: false, contextWindow: 200000, maxTokens: 8192, cost: { input: 1, output: 2 } }],
   ]);
   const enriched = enrichProviderModels(provider, [{ id: "raw-model" }], lookup, [model("raw-model", "Cached Name", 3, 4)]);
   assert.equal(enriched[0]?.id, "raw-model");
-  assert.equal(enriched[0]?.name, "Cached Name");
+  assert.equal(enriched[0]?.name, "Raw Model");
   assert.equal(enriched[0]?.reasoning, true);
   assert.deepEqual(enriched[0]?.input, ["text", "image"]);
   assert.equal(enriched[0]?.contextWindow, 1_048_576);
@@ -175,6 +175,72 @@ test("enrichment prefers endpoint catalog aliases over ambiguous unscoped model 
       maxTokens: 128_000,
       cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
       provenance: "modelsDev",
+    },
+  );
+});
+
+test("enrichment resolves uniquely matching unscoped gateway IDs by catalog suffix", () => {
+  const lookup: ModelsDevLookup = new Map([
+    [
+      "google/gemini-2.0-flash-lite-001",
+      {
+        id: "google/gemini-2.0-flash-lite-001",
+        canonicalId: "google/gemini-2.0-flash-lite-001",
+        name: "Gemini 2.0 Flash Lite",
+        reasoning: false,
+        contextWindow: 1_048_576,
+        maxTokens: 8_192,
+        cost: { input: 0.1, output: 0.4 },
+      },
+    ],
+  ]) as ModelsDevLookup;
+
+  const [enriched] = enrichProviderModels(
+    { ...provider, id: "swtaiapi", defaults: {}, modelDefaults: {} },
+    [{ id: "gemini-2.0-flash-lite-001" }],
+    lookup,
+  );
+
+  assert.deepEqual(
+    {
+      name: enriched?.name,
+      contextWindow: enriched?.contextWindow,
+      maxTokens: enriched?.maxTokens,
+      provenance: enriched?.capabilityProvenance?.contextWindow,
+    },
+    {
+      name: "Gemini 2.0 Flash Lite",
+      contextWindow: 1_048_576,
+      maxTokens: 8_192,
+      provenance: "modelsDev",
+    },
+  );
+});
+
+test("enrichment leaves ambiguous unscoped suffix matches unresolved", () => {
+  const lookup: ModelsDevLookup = new Map([
+    ["meta/llama-4-maverick-17b-128e-instruct", { id: "meta/llama-4-maverick-17b-128e-instruct", canonicalId: "meta/llama-4-maverick-17b-128e-instruct", name: "Meta Maverick", contextWindow: 1_000_000, maxTokens: 128_000 }],
+    ["groq-llama-4-maverick-17b-128e-instruct", { id: "groq-llama-4-maverick-17b-128e-instruct", canonicalId: "groq-llama-4-maverick-17b-128e-instruct", name: "Groq Maverick", contextWindow: 131_072, maxTokens: 16_384 }],
+  ]) as ModelsDevLookup;
+
+  const [enriched] = enrichProviderModels(
+    { ...provider, id: "swtaiapi", defaults: {}, modelDefaults: {} },
+    [{ id: "llama-4-maverick-17b-128e-instruct" }],
+    lookup,
+  );
+
+  assert.deepEqual(
+    {
+      name: enriched?.name,
+      contextWindow: enriched?.contextWindow,
+      maxTokens: enriched?.maxTokens,
+      modelsDev: enriched?.sources.modelsDev,
+    },
+    {
+      name: "Llama 4 Maverick 17b 128e Instruct (swtaiapi)",
+      contextWindow: 128_000,
+      maxTokens: 16_384,
+      modelsDev: undefined,
     },
   );
 });

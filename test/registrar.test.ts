@@ -96,6 +96,26 @@ test("registrar omits inactive endpoint models from provider registration", () =
   assert.deepEqual(capturedModels.map((entry) => entry.id), ["healthy-model"]);
 });
 
+test("registrar omits likely non-chat OpenAI-compatible utility and generation models", () => {
+  const capturedModels: Array<{ id?: string }> = [];
+  const pi = {
+    registerProvider(_name: string, config: { models?: Array<{ id?: string }> }) {
+      capturedModels.push(...(config.models ?? []));
+    },
+    unregisterProvider() {
+      throw new Error("unregisterProvider should not be called by this test");
+    },
+  };
+  const registrar = new ModelRegistrar(pi as never);
+  const chatModel: DiscoveredModel = { ...model, id: "gpt-5.5" };
+  const imageModel: DiscoveredModel = { ...model, id: "gpt-image-2" };
+  const embeddingModel: DiscoveredModel = { ...model, id: "bge-large-zh-v1.5" };
+  const imageOnlyOutputModel: DiscoveredModel = { ...model, id: "catalog-image-model", output: ["image"] };
+
+  assert.equal(registrar.register({ provider, models: [chatModel, imageModel, embeddingModel, imageOnlyOutputModel] }), true);
+  assert.deepEqual(capturedModels.map((entry) => entry.id), ["gpt-5.5"]);
+});
+
 test("registrar keeps degraded and metadata-less models while filtering inactive status and type markers case-insensitively", () => {
   const capturedModels: Array<{ id?: string }> = [];
   const pi = {

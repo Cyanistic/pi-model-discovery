@@ -199,6 +199,69 @@ test("provider cache freshness rejects legacy Claude Opus entries without xhigh 
   assert.equal(isProviderCacheEntryFresh("qianxiang", freshOpusEntry, now), true);
 });
 
+test("provider cache freshness rejects legacy catalog metadata hidden behind cache provenance", () => {
+  const now = new Date("2026-05-01T00:10:00.000Z");
+  const staleCatalogOverlay: CacheEntry = {
+    fetchedAt: "2026-05-01T00:09:00.000Z",
+    ttlMs: 60 * 60 * 1000,
+    authoritative: true,
+    models: [
+      {
+        ...model,
+        id: "gpt-5.5",
+        reasoning: true,
+        compat: { supportsReasoningEffort: true },
+        thinkingLevelMap: { off: "none", minimal: null, xhigh: "xhigh" },
+        sources: { dynamic: true, cache: true, modelsDev: true },
+        capabilityProvenance: { id: "dynamic", contextWindow: "cache", maxTokens: "modelsDev" },
+      },
+    ],
+  };
+  const freshCatalogOverlay: CacheEntry = {
+    ...staleCatalogOverlay,
+    models: [
+      {
+        ...staleCatalogOverlay.models[0]!,
+        capabilityProvenance: { id: "dynamic", contextWindow: "modelsDev", maxTokens: "modelsDev" },
+      },
+    ],
+  };
+
+  assert.equal(isProviderCacheEntryFresh("swtaiapi", staleCatalogOverlay, now), false);
+  assert.equal(isProviderCacheEntryFresh("swtaiapi", freshCatalogOverlay, now), true);
+});
+
+test("provider cache freshness rejects legacy non-chat OpenAI-compatible cache entries", () => {
+  const now = new Date("2026-05-01T00:10:00.000Z");
+  const staleNonChatEntry: CacheEntry = {
+    fetchedAt: "2026-05-01T00:09:00.000Z",
+    ttlMs: 60 * 60 * 1000,
+    authoritative: true,
+    models: [
+      {
+        ...model,
+        id: "gpt-image-2",
+        name: "GPT Image 2",
+        sources: { dynamic: true, endpointMetadata: true },
+        capabilityProvenance: { id: "dynamic", contextWindow: "endpointMetadata" },
+      },
+    ],
+  };
+  const freshChatEntry: CacheEntry = {
+    ...staleNonChatEntry,
+    models: [
+      {
+        ...staleNonChatEntry.models[0]!,
+        id: "chat-model",
+        name: "Chat Model",
+      },
+    ],
+  };
+
+  assert.equal(isProviderCacheEntryFresh("swtaiapi", staleNonChatEntry, now), false);
+  assert.equal(isProviderCacheEntryFresh("swtaiapi", freshChatEntry, now), true);
+});
+
 test("cache provider batch writes read and write the cache once", async () => {
   const dir = mkdtempSync(join(tmpdir(), "pi-model-discovery-cache-batch-"));
   const cachePath = join(dir, "cache.json");

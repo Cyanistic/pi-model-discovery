@@ -18,6 +18,7 @@ import { fetchOpenRouterLookup } from "./enrichment/openrouter.js";
 import { registerModelCatalogCommand } from "./commands/model-catalog-command.js";
 import { DebugLogger } from "./logging/logger.js";
 import { ModelRegistrar, type RegistrationOutcome, type RegistrationOptions } from "./registry/registrar.js";
+import { isTextCompletionModel } from "./shared/model-kind.js";
 
 interface ResourcesDiscoverEvent {
   type: "resources_discover";
@@ -161,11 +162,6 @@ function applyCurrentProviderDefaults(provider: ProviderConfigEntry, models: Dis
     const withQuirks = applyProviderModelQuirks(provider, withDefaults);
     return provider.id === "ollama" ? applyOllamaCloudFreePremium(withQuirks) : withQuirks;
   });
-}
-
-function isTextCompletionModel(provider: ProviderConfigEntry, model: DiscoveredModel): boolean {
-  if (provider.api !== "openai-completions") return true;
-  return model.output === undefined || model.output.includes("text");
 }
 
 function mergeWithStaticModels(provider: ProviderConfigEntry, models: DiscoveredModel[], modelsDevLookup: ModelsDevLookup = new Map()): DiscoveredModel[] {

@@ -18,7 +18,17 @@ function displayNameFromId(id: string, providerId: string): string {
 }
 
 function withProvenance<T extends DiscoveredModel>(model: T, field: keyof CapabilityProvenance, nextValue: unknown, source: string, currentValue: unknown): T {
-  if (nextValue === undefined || valuesEqual(currentValue, nextValue)) return model;
+  if (nextValue === undefined) return model;
+  if (valuesEqual(currentValue, nextValue)) {
+    const currentSource = model.capabilityProvenance?.[field];
+    if (source === "modelsDev" && currentSource === "cache") {
+      return {
+        ...model,
+        capabilityProvenance: recordCapabilityProvenance(model.capabilityProvenance, field, source),
+      };
+    }
+    return model;
+  }
   return {
     ...model,
     capabilityProvenance: recordCapabilityProvenance(model.capabilityProvenance, field, source),
@@ -319,6 +329,7 @@ export interface CatalogIdentityMatch {
 
 export interface CatalogIdentityIndex {
   normalizedKeys: Map<string, CatalogIdentityMatch[]>;
+  normalizedEntries: Array<{ normalized: string; matches: CatalogIdentityMatch[] }>;
 }
 
 export function buildCatalogIdentityIndex(lookup: ModelsDevLookup): CatalogIdentityIndex {
@@ -330,7 +341,8 @@ export function buildCatalogIdentityIndex(lookup: ModelsDevLookup): CatalogIdent
     matches.push({ key, metadata });
     normalizedKeys.set(normalized, matches);
   }
-  return { normalizedKeys };
+  const normalizedEntries = [...normalizedKeys.entries()].map(([normalized, matches]) => ({ normalized, matches }));
+  return { normalizedKeys, normalizedEntries };
 }
 
 function dedupeCatalogMatches(matches: CatalogIdentityMatch[]): CatalogIdentityMatch[] {
@@ -342,17 +354,32 @@ function dedupeCatalogMatches(matches: CatalogIdentityMatch[]): CatalogIdentityM
   return [...byIdentity.values()];
 }
 
+function isSafeSuffixCatalogCandidate(normalized: string): boolean {
+  const segments = normalized.split("-").filter(Boolean);
+  return segments.length >= 3 && /\d/.test(normalized);
+}
+
+function resolveSuffixCatalogMatch(normalized: string, index: CatalogIdentityIndex): ModelsDevMetadata | undefined {
+  if (!isSafeSuffixCatalogCandidate(normalized)) return undefined;
+  const suffix = `-${normalized}`;
+  const suffixMatches = index.normalizedEntries.flatMap((entry) => (entry.normalized.endsWith(suffix) ? entry.matches : []));
+  const uniqueMatches = dedupeCatalogMatches(suffixMatches);
+  return uniqueMatches.length === 1 ? uniqueMatches[0]?.metadata : undefined;
+}
+
 function resolveNormalizedCatalogMatch(candidate: string, index: CatalogIdentityIndex): ModelsDevMetadata | undefined {
   const normalized = normalizeCatalogIdentity(candidate);
   if (!normalized) return undefined;
   const matches = index.normalizedKeys.get(normalized);
-  if (!matches) return undefined;
-  const uniqueMatches = dedupeCatalogMatches(matches);
-  if (uniqueMatches.length === 1) return uniqueMatches[0]?.metadata;
+  if (matches) {
+    const uniqueMatches = dedupeCatalogMatches(matches);
+    if (uniqueMatches.length === 1) return uniqueMatches[0]?.metadata;
 
-  const lowerCandidate = candidate.trim().toLowerCase();
-  const exactKeyMatches = uniqueMatches.filter((match) => match.key.trim().toLowerCase() === lowerCandidate);
-  return exactKeyMatches.length === 1 ? exactKeyMatches[0]?.metadata : undefined;
+    const lowerCandidate = candidate.trim().toLowerCase();
+    const exactKeyMatches = uniqueMatches.filter((match) => match.key.trim().toLowerCase() === lowerCandidate);
+    return exactKeyMatches.length === 1 ? exactKeyMatches[0]?.metadata : undefined;
+  }
+  return resolveSuffixCatalogMatch(normalized, index);
 }
 
 function addCatalogLookupCandidate(candidates: string[], value: string | undefined): void {
@@ -448,13 +475,10 @@ export function enrichProviderModels(
     };
 
     const catalogDefaults = modelsDevDefaults(provider, rawModel, modelsDevLookup, catalogIdentityIndex);
+    model = applyModelDefaults(model, cacheDefaults(cacheById.get(rawModel.id)), "cache");
+    model = applyModelDefaults(model, catalogDefaults, "modelsDev");
     if (provider.source === "auto-import") {
-      model = applyModelDefaults(model, cacheDefaults(cacheById.get(rawModel.id)), "cache");
-      model = applyModelDefaults(model, catalogDefaults, "modelsDev");
       model = applyModelDefaults(model, provider.modelDefaults[rawModel.id], "modelsJsonDefaults");
-    } else {
-      model = applyModelDefaults(model, catalogDefaults, "modelsDev");
-      model = applyModelDefaults(model, cacheDefaults(cacheById.get(rawModel.id)), "cache");
     }
     model = applyModelDefaults(model, rawModel.defaults, "endpointDetails");
     model = applyRawEndpointMetadata(model, rawModel);

@@ -33,6 +33,22 @@ function readCost(value: unknown): Partial<Cost> | undefined {
   return Object.keys(cost).length > 0 ? cost : undefined;
 }
 
+function readContextPricingTierSize(value: unknown): number | undefined {
+  if (!isRecord(value) || !Array.isArray(value.tiers)) return undefined;
+  const sizes: number[] = [];
+  for (const rawTier of value.tiers) {
+    if (!isRecord(rawTier) || !isRecord(rawTier.tier)) continue;
+    if (typeof rawTier.tier.type !== "string" || rawTier.tier.type.trim().toLowerCase() !== "context") continue;
+    const size = readPositiveNumber(rawTier.tier, "size");
+    if (size !== undefined) sizes.push(size);
+  }
+  return sizes.length > 0 ? Math.min(...sizes) : undefined;
+}
+
+function readContextWindow(candidate: Record<string, unknown>, limit: Record<string, unknown> | undefined): number | undefined {
+  return readContextPricingTierSize(candidate.cost) ?? readPositiveNumber(limit, "input") ?? readPositiveNumber(limit, "context");
+}
+
 function readInputModalities(value: unknown, capabilities: CapabilityFlags): InputModality[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const input: InputModality[] = [];
@@ -93,7 +109,7 @@ export function mapModelsDevRecordToPiMetadata(candidate: Record<string, unknown
   if (!id) return undefined;
 
   const limit = isRecord(candidate.limit) ? candidate.limit : undefined;
-  const contextWindow = readPositiveNumber(limit, "context") ?? readPositiveNumber(limit, "input");
+  const contextWindow = readContextWindow(candidate, limit);
   const maxTokens = readPositiveNumber(limit, "output");
   const capabilities: CapabilityFlags = {};
   mergeCapabilityFlagsInto(capabilities, candidate.capabilities);

@@ -1,4 +1,5 @@
 import type { ProviderConfigEntry } from "../config/types.js";
+import { isLikelyNonTextGenerationModel } from "../shared/model-kind.js";
 import { createEmptyCache, readCacheFile, writeCacheFile } from "./json-store.js";
 import type { CacheEntry, CacheSchema, DiscoveredModel } from "./types.js";
 
@@ -41,12 +42,28 @@ function hasLegacyClaudeOpusThinkingLevelGaps(providerId: string | undefined, en
   });
 }
 
+const LEGACY_CATALOG_CACHE_OVERLAY_PATTERN = /(^|\/)(?:gpt-[5-9]|claude-(?:haiku|opus|sonnet)-4|gemini-(?:2\.5|3)|grok-4|kimi-k2|mimo-v2|deepseek-v4|qwen3\.5|glm-4\.7|gpt-oss-120b)(?:$|[-.:/])/i;
+
+function hasLegacyCatalogCacheOverlay(entry: CacheEntry): boolean {
+  return entry.models.some((model) => {
+    if (model.sources.modelsDev !== true) return false;
+    if (!LEGACY_CATALOG_CACHE_OVERLAY_PATTERN.test(model.id)) return false;
+    return model.capabilityProvenance?.contextWindow === "cache" || model.capabilityProvenance?.maxTokens === "cache";
+  });
+}
+
+function hasLegacyNonTextGenerationModels(entry: CacheEntry): boolean {
+  return entry.models.some((model) => isLikelyNonTextGenerationModel(model));
+}
+
 export function isCacheEntryFresh(entry: CacheEntry, now = new Date(), providerId?: string): boolean {
   if (!entry.authoritative && entry.models.length === 0) return false;
   if (hasLegacyGlobalDefaultOnlyMetadata(entry)) return false;
   if (hasLegacyBlazeApiClaudeAnthropicOverrides(providerId, entry)) return false;
   if (hasLegacyOpenAIReasoningCompatGaps(providerId, entry)) return false;
   if (hasLegacyClaudeOpusThinkingLevelGaps(providerId, entry)) return false;
+  if (hasLegacyCatalogCacheOverlay(entry)) return false;
+  if (hasLegacyNonTextGenerationModels(entry)) return false;
   const fetchedAtMs = Date.parse(entry.fetchedAt);
   if (!Number.isFinite(fetchedAtMs)) return false;
   const maxAge = entry.authoritative ? entry.ttlMs : NON_AUTHORITATIVE_RETRY_MS;

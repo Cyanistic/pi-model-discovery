@@ -7,6 +7,10 @@ import type { CacheEntry, CacheSchema, DiscoveredModel } from "../cache/types.js
 import type { ExtensionConfig, InputModality, ProviderConfigEntry } from "../config/types.js";
 import { loadConfig } from "../config/loader.js";
 import { classifyFreeModels } from "../enrichment/free-classifier.js";
+import { applyModelDefaults, buildCatalogIdentityIndex, resolveModelsDevDefaults, type CatalogIdentityIndex } from "../enrichment/merger.js";
+import { fetchModelsDevLookup, mergeModelsDevLookups, type ModelsDevLookup } from "../enrichment/models-dev.js";
+import { fetchOpenRouterLookup } from "../enrichment/openrouter.js";
+import { isTextCompletionModel } from "../shared/model-kind.js";
 
 interface ThemeLike {
   fg?(name: string, text: string): string;
@@ -19,6 +23,7 @@ interface CatalogProvider {
   entry?: CacheEntry;
   fresh: boolean;
   modelCount: number;
+  runtimeOnly?: boolean;
 }
 
 interface CatalogModel {
@@ -208,6 +213,7 @@ function freeFilterLabel(filter: FreeFilter): string {
 }
 
 function cacheStatus(provider: CatalogProvider): string {
+  if (provider.runtimeOnly) return "Runtime";
   if (!provider.entry) return "No cache";
   return provider.fresh ? "Fresh" : "Expired";
 }
@@ -217,6 +223,7 @@ function cacheFilterLabel(filter: CacheFilter): string {
 }
 
 function authoritativeLabel(provider: CatalogProvider): string {
+  if (provider.runtimeOnly) return "Runtime registry";
   if (!provider.entry) return "None";
   return provider.entry.authoritative ? "Authoritative" : "Non-authoritative";
 }
@@ -359,7 +366,7 @@ class ModelCatalogModal {
   }
 
   render(width: number): string[] {
-    const frameWidth = Math.max(20, Math.min(Math.max(width, 1), 160));
+    const frameWidth = Math.max(20, width);
     const contentWidth = frameWidth - 2;
     const filtered = this.filteredModels();
     const selected = filtered[this.selectedIndex];
@@ -557,7 +564,7 @@ class ModelCatalogModal {
     const provider = item.provider;
     const details = [
       `ID: ${model.id}`,
-      `Provider: ${item.providerId} | Source: ${provider.configured?.source ?? "cache-only"}`,
+      `Provider: ${item.providerId} | Source: ${provider.runtimeOnly ? "runtime-registry" : provider.configured?.source ?? "cache-only"}`,
       `Free: ${freeLabel(model)} | Reasoning: ${model.reasoning ? "Yes" : "No"}`,
       `Context Window: ${formatNumber(model.contextWindow)}`,
       `Max Tokens: ${formatNumber(model.maxTokens)}`,
@@ -702,17 +709,17 @@ class ModelCatalogModal {
   }
 }
 
-function fallbackSummary(data: CatalogData): string {
+export function fallbackSummary(data: CatalogData): string {
   const total = data.models.length;
   const free = data.models.filter((item) => item.model.isFree === true).length;
   const paid = data.models.filter((item) => item.model.isFree === false).length;
   const unknown = total - free - paid;
-  const providers = data.providers.map((provider) => `${provider.id}: ${provider.modelCount} models, ${cacheStatus(provider)}, ${authoritativeLabel(provider)}`);
+  const providers = data.providers.map((provider) => provider.runtimeOnly ? `${provider.id}: ${provider.modelCount} models, Runtime registry` : `${provider.id}: ${provider.modelCount} models, ${cacheStatus(provider)}, ${authoritativeLabel(provider)}`);
   return [`Pi Model Discovery Catalog: ${total} models across ${data.providers.length} providers (${free} free, ${paid} paid, ${unknown} unknown).`, ...providers].join("\n");
 }
 
 async function openCatalogModal(ctx: ExtensionCommandContext, data: CatalogData, initialQuery: string): Promise<void> {
-  const overlayOptions = { anchor: "center" as const, width: 160, maxHeight: "92%" as const, margin: 1 };
+  const overlayOptions = { anchor: "center" as const, width: "98%" as const, maxHeight: "92%" as const, margin: 1 };
   await ctx.ui.custom<void>(
     (tui, theme, _keybindings, done) => {
       const modal = new ModelCatalogModal(data, theme as ThemeLike, initialQuery, done, () => tui.terminal.rows);
@@ -747,56 +754,88 @@ interface RegistryModelLike {
   maxTokens: number;
 }
 
+function registryProviderConfig(providerId: string, model: RegistryModelLike): ProviderConfigEntry {
+  return {
+    id: providerId,
+    baseUrl: model.baseUrl,
+    apiKey: "runtime-registry",
+    api: model.api as ProviderConfigEntry["api"],
+    authHeader: true,
+    headers: {},
+    discovery: {
+      type: "static",
+      enabled: false,
+      headers: {},
+      timeoutMs: 0,
+      includeDetails: false,
+      allowModels: [],
+      blockModels: [],
+    },
+    defaults: {},
+    modelDefaults: {},
+    source: "auto-import",
+  };
+}
+
+function registryModelToDiscovered(providerId: string, registryModel: RegistryModelLike, modelsDevLookup: ModelsDevLookup, catalogIdentityIndex: CatalogIdentityIndex): DiscoveredModel | undefined {
+  const provider = registryProviderConfig(providerId, registryModel);
+  let discovered: DiscoveredModel = {
+    id: registryModel.id,
+    name: registryModel.name,
+    api: registryModel.api as DiscoveredModel["api"],
+    baseUrl: registryModel.baseUrl,
+    reasoning: registryModel.reasoning,
+    input: registryModel.input as InputModality[],
+    contextWindow: registryModel.contextWindow,
+    maxTokens: registryModel.maxTokens,
+    cost: registryModel.cost,
+    sources: { modelRegistry: true },
+    capabilityProvenance: {},
+  };
+
+  const catalogDefaults = resolveModelsDevDefaults(provider, { id: registryModel.id, name: registryModel.name }, modelsDevLookup, catalogIdentityIndex);
+  discovered = applyModelDefaults(discovered, catalogDefaults, "modelsDev");
+  return isTextCompletionModel(provider, discovered) ? discovered : undefined;
+}
+
 /**
  * Merge providers/models from pi's runtime model registry into the catalog data.
  * This ensures providers registered by other extensions (pi-multi-auth, built-in
  * provider managers, etc.) that pi-model-discovery doesn't know about still appear.
  */
-function mergeRegistryModels(data: CatalogData, registryModels: RegistryModelLike[]): CatalogData {
+export function mergeRegistryModels(data: CatalogData, registryModels: RegistryModelLike[], modelsDevLookup: ModelsDevLookup = new Map()): CatalogData {
   if (registryModels.length === 0) return data;
 
-  // Group registry models by provider ID
   const registryByProvider = new Map<string, RegistryModelLike[]>();
   for (const model of registryModels) {
+    if (!model.provider || !model.id) continue;
     const pid = model.provider;
     if (!registryByProvider.has(pid)) registryByProvider.set(pid, []);
     registryByProvider.get(pid)!.push(model);
   }
 
-  // Determine which provider IDs are already known to the catalog
-  const knownProviderIds = new Set(data.providers.map((p) => p.id));
-
-  // Build synthetic providers for any registry-only providers
+  const knownProviderIds = new Set(data.providers.map((provider) => provider.id));
+  const catalogIdentityIndex = buildCatalogIdentityIndex(modelsDevLookup);
   const newProviders: CatalogProvider[] = [];
   const newModels: CatalogModel[] = [];
 
-  for (const [providerId, models] of registryByProvider) {
+  for (const [providerId, models] of [...registryByProvider.entries()].sort(([left], [right]) => left.localeCompare(right))) {
     if (knownProviderIds.has(providerId)) continue;
 
-    // Convert registry models -> DiscoveredModel[], then apply free classification
-    const discoveredModels: DiscoveredModel[] = models.map((rm) => ({
-      id: rm.id,
-      name: rm.name,
-      api: rm.api,
-      baseUrl: rm.baseUrl,
-      reasoning: rm.reasoning,
-      input: rm.input as InputModality[],
-      contextWindow: rm.contextWindow,
-      maxTokens: rm.maxTokens,
-      cost: rm.cost,
-      sources: { modelRegistry: true },
-      capabilityProvenance: {},
-    })) satisfies DiscoveredModel[];
-
+    const discoveredModels = models
+      .map((registryModel) => registryModelToDiscovered(providerId, registryModel, modelsDevLookup, catalogIdentityIndex))
+      .filter((model): model is DiscoveredModel => model !== undefined);
     const classified = classifyFreeModels(discoveredModels, {
       providerId,
       wholeProviderFree: false,
     });
+    if (classified.length === 0) continue;
 
     const catalogProvider: CatalogProvider = {
       id: providerId,
       fresh: false,
       modelCount: classified.length,
+      runtimeOnly: true,
     };
     newProviders.push(catalogProvider);
 
@@ -814,6 +853,25 @@ function mergeRegistryModels(data: CatalogData, registryModels: RegistryModelLik
   };
 }
 
+async function loadModalCatalogLookup(data: CatalogData): Promise<ModelsDevLookup> {
+  const lookups: ModelsDevLookup[] = [];
+  if (data.config.modelsDev.enabled) {
+    try {
+      lookups.push(await fetchModelsDevLookup(data.config.modelsDev.url, data.config.modelsDev.timeoutMs));
+    } catch (error) {
+      data.configWarnings.push(`models.dev catalog unavailable for runtime registry enrichment: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  if (data.config.openRouter?.enabled) {
+    try {
+      lookups.push(await fetchOpenRouterLookup(data.config.openRouter.url, data.config.openRouter.timeoutMs));
+    } catch (error) {
+      data.configWarnings.push(`OpenRouter catalog unavailable for runtime registry enrichment: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return mergeModelsDevLookups(lookups);
+}
+
 export function registerModelCatalogCommand(pi: ExtensionAPI, extensionRoot: string): void {
   pi.registerCommand("pi-model-discovery", {
     description: "Open the pi-model-discovery catalog with cache metadata, search, filters, and sorting",
@@ -825,9 +883,12 @@ export function registerModelCatalogCommand(pi: ExtensionAPI, extensionRoot: str
       // unknown to pi-model-discovery's own config/cache.
       try {
         const allModels = ctx.modelRegistry.getAll() as unknown as RegistryModelLike[];
-        data = mergeRegistryModels(data, allModels);
-      } catch {
-        // Silently skip if modelRegistry is unavailable
+        if (allModels.length > 0) {
+          const runtimeCatalogLookup = await loadModalCatalogLookup(data);
+          data = mergeRegistryModels(data, allModels, runtimeCatalogLookup);
+        }
+      } catch (error) {
+        data.configWarnings.push(`Runtime model registry unavailable for catalog merge: ${error instanceof Error ? error.message : String(error)}`);
       }
 
       if (!ctx.hasUI) {
