@@ -1,6 +1,6 @@
 {
   "name": "pi-model-discovery",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": false,
   "description": "Pi extension that discovers provider models, enriches metadata, caches results, and registers them dynamically.",
   "type": "module",
@@ -57,11 +57,11 @@
     "node": ">=20"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.74.0 || ^0.75.0 || ^0.77.0 || ^0.78.0",
-    "@earendil-works/pi-tui": "^0.74.0 || ^0.75.0 || ^0.77.0 || ^0.78.0"
+    "@earendil-works/pi-coding-agent": "^0.74.0 || ^0.75.0 || ^0.77.0 || ^0.78.0 || ^0.79.0",
+    "@earendil-works/pi-tui": "^0.74.0 || ^0.75.0 || ^0.77.0 || ^0.78.0 || ^0.79.0"
   },
   "devDependencies": {
-    "@types/node": "^25.9.1",
+    "@types/node": "^25.9.3",
     "typescript": "^6.0.3"
   },
   "publishConfig": {
