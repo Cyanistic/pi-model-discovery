@@ -10,7 +10,6 @@ import type {
   ThinkingLevelMap,
 } from "../config/types.js";
 import type { DiscoveredModel } from "../cache/types.js";
-import { isTextCompletionModel } from "../shared/model-kind.js";
 
 export interface RegistrationPlan {
   provider: ProviderConfigEntry;
@@ -74,8 +73,8 @@ function isInactiveEndpointMarker(value: string | undefined): boolean {
   return INACTIVE_ENDPOINT_STATUSES.has(normalized);
 }
 
-function isRegistrableEndpointModel(provider: ProviderConfigEntry, model: DiscoveredModel): boolean {
-  return !isInactiveEndpointMarker(model.endpointMetadata?.status) && !isInactiveEndpointMarker(model.endpointMetadata?.type) && isTextCompletionModel(provider, model);
+function isRegistrableEndpointModel(model: DiscoveredModel): boolean {
+  return !isInactiveEndpointMarker(model.endpointMetadata?.status) && !isInactiveEndpointMarker(model.endpointMetadata?.type);
 }
 
 function toProviderModelConfig(model: DiscoveredModel): ExtendedProviderModelConfig {
@@ -231,10 +230,18 @@ export class ModelRegistrar {
       });
     }
 
-    const activeModels = plan.models.filter((model) => isRegistrableEndpointModel(plan.provider, model));
-    const inactiveModelIds = new Set(plan.models.filter((model) => !isRegistrableEndpointModel(plan.provider, model)).map((model) => model.id));
+    const activeModels = plan.models.filter(isRegistrableEndpointModel);
+    const inactiveModelIds = new Set(plan.models.filter((model) => !isRegistrableEndpointModel(model)).map((model) => model.id));
     const discoveredModels = filterPiBuiltInDuplicates(activeModels.map(toProviderModelConfig), options);
     const models = mergeRegistrationModels(discoveredModels, managedByCredentialOwner ? { ...options, importMode: options.importMode ?? "merge" } : options, inactiveModelIds);
+    // Apply provider-level compat from models.json to all discovered models
+    const providerCompat = plan.provider.defaults?.compat;
+    if (providerCompat) {
+      for (const model of models) {
+        if (!model.compat) model.compat = {};
+        model.compat = { ...providerCompat, ...model.compat };
+      }
+    }
     const providerConfig: ProviderConfig = {
       baseUrl: plan.provider.baseUrl,
       apiKey: plan.provider.apiKey,

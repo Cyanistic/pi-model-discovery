@@ -1165,7 +1165,11 @@ function loadAutoImportedProviders(autoImport: AutoImportConfig, globalMaxModels
         allowModels: profile?.discoveryAllowModels ?? [],
         blockModels: profile?.discoveryBlockModels ?? [],
       },
-      defaults: { ...(profile?.defaults ?? {}), ...normalizeDefaults(provider.defaults, warnings, `autoImport.providers.${inheritedFromProviderId ?? providerId}.defaults`) },
+      defaults: {
+        ...(profile?.defaults ?? {}),
+        ...normalizeDefaults(provider.defaults, warnings, `autoImport.providers.${inheritedFromProviderId ?? providerId}.defaults`),
+        ...(isRecord(provider.compat) ? { compat: provider.compat } : {}),
+      },
       modelDefaults: readModelDefaults(provider.models, warnings, inheritedFromProviderId ?? providerId),
       fallbackModelIds,
       source: "auto-import",

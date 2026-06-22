@@ -39,6 +39,12 @@ interface OpenAIModelEntry {
   pool_size?: unknown;
   rateLimitRpm?: unknown;
   rate_limit_rpm?: unknown;
+  context_length?: unknown;
+  max_context_length?: unknown;
+  max_output_tokens?: unknown;
+  input_price_per_million?: unknown;
+  output_price_per_million?: unknown;
+  capabilities?: unknown;
 }
 
 interface OpenAIModelsResponse {
@@ -396,6 +402,33 @@ function readModelEntries(payload: unknown): OpenAIModelEntry[] {
   throw new Error("Malformed OpenAI-compatible discovery payload: expected data[] or result[] model list.");
 }
 
+function readExtendedFields(entry: OpenAIModelEntry): DiscoveryDefaults | undefined {
+  const contextLength = readNumberValue(entry.context_length, entry.max_context_length);
+  const maxTokens = readNumberValue(entry.max_output_tokens);
+  const reasoning = readBooleanValue(
+    isRecord(entry.capabilities) ? entry.capabilities.reasoning : undefined,
+  );
+
+  if (!contextLength && !maxTokens && reasoning === undefined) return undefined;
+
+  const defaults: DiscoveryDefaults = {};
+  if (contextLength !== undefined) defaults.contextWindow = contextLength;
+  if (maxTokens !== undefined) defaults.maxTokens = maxTokens;
+  if (reasoning !== undefined) defaults.reasoning = reasoning;
+
+  const inputCost = readNumberValue(entry.input_price_per_million);
+  const outputCost = readNumberValue(entry.output_price_per_million);
+  // Only set cost when there's actual per-token pricing (>0).
+  // Zero-cost subscription models should not be marked as free.
+  if ((inputCost ?? 0) > 0 || (outputCost ?? 0) > 0) {
+    defaults.cost = {};
+    if (inputCost !== undefined && inputCost > 0) defaults.cost.input = inputCost;
+    if (outputCost !== undefined && outputCost > 0) defaults.cost.output = outputCost;
+  }
+
+  return Object.keys(defaults).length > 0 ? defaults : undefined;
+}
+
 function parseOpenAIModelEntries(entries: OpenAIModelEntry[], responseBaseUrl?: string): RawDiscoveredModel[] {
   const parsed: RawDiscoveredModel[] = [];
   for (const entry of entries) {
@@ -413,7 +446,11 @@ function parseOpenAIModelEntries(entries: OpenAIModelEntry[], responseBaseUrl?: 
     const tags = readTags(entry.tags);
     if (tags) model.tags = tags;
     const cloudflareProperties = readCloudflareProperties(entry.properties);
-    const defaults = mergeDefaults(readSupportsDefaults(entry.supports), cloudflareProperties.defaults);
+    const defaults = mergeDefaults(
+      readSupportsDefaults(entry.supports),
+      cloudflareProperties.defaults,
+      readExtendedFields(entry),
+    );
     if (defaults) model.defaults = defaults;
     const catalogLookupIds = readCatalogLookupIds(entry, id);
     if (catalogLookupIds) model.catalogLookupIds = catalogLookupIds;
